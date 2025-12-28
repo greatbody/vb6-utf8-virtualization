@@ -1,0 +1,6 @@
+{
+    "physical_path": "C:\\Data",
+    "mount_point": "Z:",
+    "allowed_processes": ["a.exe", "notepad.exe", "vscode.exe"],
+    "allowed_extensions": [".txt", ".csv", ".bas", ".frm", ".cls", ".vbp", ".log", ".ini"]
+}
