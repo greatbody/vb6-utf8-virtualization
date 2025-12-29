@@ -39,8 +39,12 @@ func (fs *ProxyFS) getPhysicalPath(path string) string {
 func (fs *ProxyFS) CreateFile(ctx context.Context, fi *dokan.FileInfo, cd *dokan.CreateData) (dokan.File, dokan.CreateStatus, error) {
 	path := fi.Path()
 	phys := fs.getPhysicalPath(path)
+	processName, _ := getProcessName(uint32(fi.ProcessId()))
+	if processName == "" {
+		processName = fmt.Sprintf("PID:%d", fi.ProcessId())
+	}
 
-	log.Printf("CreateFile: %s (IsDir: %v)", path, fi.IsDirectory())
+	log.Printf("[%s] CreateFile: %s (IsDir: %v)", processName, path, fi.IsDirectory())
 
 	// Always allow root directory
 	if path == "\\" {
@@ -70,8 +74,10 @@ func (fs *ProxyFS) CreateFile(ctx context.Context, fi *dokan.FileInfo, cd *dokan
 		return &ProxyFile{fs: fs, path: path, isDir: true, physicalPath: phys}, 0, nil
 	}
 
-	processName, _ := getProcessName(uint32(fi.ProcessId()))
 	shouldTranscode := fs.Filter.ShouldProcess(processName, path)
+	if shouldTranscode {
+		log.Printf("[%s] Transcoding enabled for: %s", processName, path)
+	}
 
 	file := &ProxyFile{
 		fs:           fs,
@@ -185,7 +191,11 @@ func (f *ProxyFile) WriteFile(ctx context.Context, fi *dokan.FileInfo, bs []byte
 }
 
 func (f *ProxyFile) GetFileInformation(ctx context.Context, fi *dokan.FileInfo) (*dokan.Stat, error) {
-	log.Printf("GetFileInformation: %s", f.path)
+	processName, _ := getProcessName(uint32(fi.ProcessId()))
+	if processName == "" {
+		processName = fmt.Sprintf("PID:%d", fi.ProcessId())
+	}
+	log.Printf("[%s] GetFileInformation: %s", processName, f.path)
 	st, err := os.Stat(f.physicalPath)
 	if err != nil {
 		log.Printf("GetFileInformation Error: %s: %v", f.path, err)
@@ -209,6 +219,11 @@ func (f *ProxyFile) GetFileInformation(ctx context.Context, fi *dokan.FileInfo) 
 }
 
 func (f *ProxyFile) FindFiles(ctx context.Context, fi *dokan.FileInfo, pattern string, fill func(*dokan.NamedStat) error) error {
+	processName, _ := getProcessName(uint32(fi.ProcessId()))
+	if processName == "" {
+		processName = fmt.Sprintf("PID:%d", fi.ProcessId())
+	}
+	log.Printf("[%s] FindFiles: %s (pattern: %s)", processName, f.path, pattern)
 	phys := f.physicalPath
 	entries, err := os.ReadDir(phys)
 	if err != nil {
@@ -238,6 +253,11 @@ func (f *ProxyFile) FindFiles(ctx context.Context, fi *dokan.FileInfo, pattern s
 }
 
 func (f *ProxyFile) Cleanup(ctx context.Context, fi *dokan.FileInfo) {
+	processName, _ := getProcessName(uint32(fi.ProcessId()))
+	if processName == "" {
+		processName = fmt.Sprintf("PID:%d", fi.ProcessId())
+	}
+	log.Printf("[%s] Cleanup: %s", processName, f.path)
 	if f.isDirty && f.transcoding {
 		gbData, err := transcoder.ConvertToGB18030(f.utf8Content)
 		if err == nil {
