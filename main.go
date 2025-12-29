@@ -37,11 +37,12 @@ func main() {
 	}
 
 	// Mount
+	fmt.Printf("Starting mount to %s using Dokany 1.x...\n", cfg.MountPoint)
 	m, err := dokan.Mount(dokanCfg)
 	if err != nil {
-		log.Fatalf("Mount failed: %v", err)
+		log.Fatalf("Mount failed: %v\nMake sure Dokany 1.x driver is installed and DOKAN1.DLL is in your PATH.", err)
 	}
-	fmt.Printf("Mounted %s to %s\n", cfg.PhysicalPath, cfg.MountPoint)
+	fmt.Printf("Mounted %s to %s successfully\n", cfg.PhysicalPath, cfg.MountPoint)
 
 	// Wait for signal
 	sigs := make(chan os.Signal, 1)

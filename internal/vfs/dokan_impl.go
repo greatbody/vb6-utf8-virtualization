@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,8 +40,33 @@ func (fs *ProxyFS) CreateFile(ctx context.Context, fi *dokan.FileInfo, cd *dokan
 	path := fi.Path()
 	phys := fs.getPhysicalPath(path)
 
+	log.Printf("CreateFile: %s (IsDir: %v)", path, fi.IsDirectory())
+
+	// Always allow root directory
+	if path == "\\" {
+		return &ProxyFile{fs: fs, path: path, isDir: true, physicalPath: phys}, 0, nil
+	}
+
 	st, err := os.Stat(phys)
+
+	// Handle directory open/create
+	if fi.IsDirectory() {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, 0, os.ErrNotExist
+			}
+			return nil, 0, err
+		}
+		if !st.IsDir() {
+			return nil, 0, fmt.Errorf("not a directory")
+		}
+		return &ProxyFile{fs: fs, path: path, isDir: true, physicalPath: phys}, 0, nil
+	}
+
+	// If it's a file but exists as a directory
 	if err == nil && st.IsDir() {
+		// Return as directory anyway if requested as file but is a directory
+		// Some apps do this to check existence
 		return &ProxyFile{fs: fs, path: path, isDir: true, physicalPath: phys}, 0, nil
 	}
 
@@ -60,19 +86,26 @@ func (fs *ProxyFS) CreateFile(ctx context.Context, fi *dokan.FileInfo, cd *dokan
 			utf8Content, _ := transcoder.NormalizeToUTF8(content)
 			file.utf8Content = utf8Content
 			file.originalSize = int64(len(content))
+		} else if !os.IsNotExist(err) {
+			return nil, 0, err
 		}
 	} else {
 		// Passthrough
-		h, err := os.Open(phys)
+		h, err := os.OpenFile(phys, os.O_RDWR, 0)
+		if err != nil {
+			h, err = os.Open(phys)
+		}
 		if err == nil {
 			file.handle = h
+		} else if !os.IsNotExist(err) {
+			return nil, 0, err
 		}
 	}
 
 	return file, 0, nil
 }
 
-func (fs *ProxyFS) GetDiskFreeSpace(ctx context.Context, fi *dokan.FileInfo) (dokan.FreeSpace, error) {
+func (fs *ProxyFS) GetDiskFreeSpace(ctx context.Context) (dokan.FreeSpace, error) {
 	return dokan.FreeSpace{
 		FreeBytesAvailable:     10 * 1024 * 1024 * 1024,
 		TotalNumberOfBytes:     20 * 1024 * 1024 * 1024,
@@ -80,7 +113,7 @@ func (fs *ProxyFS) GetDiskFreeSpace(ctx context.Context, fi *dokan.FileInfo) (do
 	}, nil
 }
 
-func (fs *ProxyFS) GetVolumeInformation(ctx context.Context, fi *dokan.FileInfo) (dokan.VolumeInformation, error) {
+func (fs *ProxyFS) GetVolumeInformation(ctx context.Context) (dokan.VolumeInformation, error) {
 	return dokan.VolumeInformation{
 		VolumeName:             "UTF8Proxy",
 		VolumeSerialNumber:     0x12345678,
@@ -89,11 +122,24 @@ func (fs *ProxyFS) GetVolumeInformation(ctx context.Context, fi *dokan.FileInfo)
 	}, nil
 }
 
-func (fs *ProxyFS) Mounted(ctx context.Context, fi *dokan.FileInfo) error   { return nil }
-func (fs *ProxyFS) Unmounted(ctx context.Context, fi *dokan.FileInfo) error { return nil }
+func (fs *ProxyFS) Mounted(ctx context.Context) error   { return nil }
+func (fs *ProxyFS) Unmounted(ctx context.Context) error { return nil }
 
-func (fs *ProxyFS) Print(s string)      {}
-func (fs *ProxyFS) ErrorPrint(s string) {}
+func (fs *ProxyFS) WithContext(c context.Context) (context.Context, context.CancelFunc) {
+	return context.WithCancel(c)
+}
+
+func (fs *ProxyFS) ErrorPrint(err error) {
+	log.Printf("Dokan Error: %v", err)
+}
+
+func (fs *ProxyFS) Printf(format string, v ...interface{}) {
+	log.Printf("Dokan: "+format, v...)
+}
+
+func (fs *ProxyFS) MoveFile(ctx context.Context, sourceHandle dokan.File, sourceFileInfo *dokan.FileInfo, targetPath string, replaceExisting bool) error {
+	return nil
+}
 
 // ProxyFile implementation
 
@@ -139,8 +185,10 @@ func (f *ProxyFile) WriteFile(ctx context.Context, fi *dokan.FileInfo, bs []byte
 }
 
 func (f *ProxyFile) GetFileInformation(ctx context.Context, fi *dokan.FileInfo) (*dokan.Stat, error) {
+	log.Printf("GetFileInformation: %s", f.path)
 	st, err := os.Stat(f.physicalPath)
 	if err != nil {
+		log.Printf("GetFileInformation Error: %s: %v", f.path, err)
 		return &dokan.Stat{FileAttributes: 128}, nil
 	}
 	s := &dokan.Stat{
@@ -182,7 +230,9 @@ func (f *ProxyFile) FindFiles(ctx context.Context, fi *dokan.FileInfo, pattern s
 		} else {
 			ns.Stat.FileAttributes = 128
 		}
-		fill(ns)
+		if err := fill(ns); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -223,7 +273,7 @@ func (f *ProxyFile) GetFileSecurity(ctx context.Context, fi *dokan.FileInfo, si 
 func (f *ProxyFile) SetFileSecurity(ctx context.Context, fi *dokan.FileInfo, si winacl.SecurityInformation, sd *winacl.SecurityDescriptor) error {
 	return nil
 }
-func (f *ProxyFile) SetFileAttributes(ctx context.Context, fi *dokan.FileInfo, attr uint32) error {
+func (f *ProxyFile) SetFileAttributes(ctx context.Context, fi *dokan.FileInfo, attr dokan.FileAttribute) error {
 	return nil
 }
 func (f *ProxyFile) SetFileTime(ctx context.Context, fi *dokan.FileInfo, ctime, atime, mtime time.Time) error {
